@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+
+<html lang="pt-BR">
+
+<head>
+
+    <meta charset="UTF-8">
+
+    <meta name="viewport"
+          content="width=device-width, initial-scale=1.0">
+
+    <title>Monitoramento</title>
+
+    <link rel="stylesheet"
+          href="/static/style.css">
+
+</head>
+
+<body>
+
+    <header>
+
+        <h1>
+            Monitoramento do Computador
+        </h1>
+
+        <p>
+            GraphQL + WebSocket
+        </p>
+
+    </header>
+
+
+    <main>
+
+        <section class="cards">
+
+            <div class="card">
+
+                <h2>CPU</h2>
+
+                <p id="cpu">
+                    -- %
+                </p>
+
+            </div>
+
+
+            <div class="card">
+
+                <h2>RAM</h2>
+
+                <p id="ram">
+                    -- %
+                </p>
+
+            </div>
+
+
+            <div class="card">
+
+                <h2>Disco</h2>
+
+                <p id="disco">
+                    -- %
+                </p>
+
+            </div>
+
+        </section>
+
+
+        <section class="status">
+
+            <p id="status">
+                Conectando ao WebSocket...
+            </p>
+
+            <p id="horario">
+                Última atualização: --
+            </p>
+
+        </section>
+
+
+        <section class="consultas">
+
+            <h2>
+                Consultas GraphQL
+            </h2>
+
+            <button onclick="consultarMediaCpu()">
+
+                Média da CPU - últimos 30 segundos
+
+            </button>
+
+            <button onclick="consultarMediaDisco()">
+
+                Média do Disco - últimos 30 segundos
+
+            </button>
+
+            <button onclick="consultarEstatisticasCpu()">
+
+                Estatísticas da CPU (média/máx/mín) - últimos 60 segundos
+
+            </button>
+
+
+            <p id="resultado">
+                Resultado: --
+            </p>
+
+        </section>
+
+    </main>
+
+
+    <script src="/static/script.js"></script>
+
+</body>
+
+</html>

@@ -1,0 +1,330 @@
+==============================================================
+UNIVERSIDADE FEDERAL DO PIAUI
+Campus Senador Helvidio Nunes de Barros
+Bacharelado em Sistemas de Informacao
+Disciplina: Estatistica
+Professor: Evandro J.R. Silva
+
+Trabalho: APIs - GraphQL + WebSocket
+Dupla: [NOME COMPLETO 1], [NOME COMPLETO 2]
+==============================================================
+
+
+1. RESUMO
+--------------------------------------------------------------
+
+Este trabalho apresenta a implementacao de um sistema de
+monitoramento de recursos de computador (uso de CPU, RAM e disco),
+combinando dois paradigmas de API: WebSocket, para transmissao dos
+dados em tempo real, e GraphQL, para consultas flexiveis sobre o
+historico recente das metricas coletadas. O servidor foi
+desenvolvido em Python com FastAPI e persiste os dados em um banco
+SQLite local; o cliente e uma pagina web simples que exibe os
+valores atualizados e permite disparar consultas GraphQL sob
+demanda. Alem da implementacao, este relatorio documenta as duas
+APIs desenvolvidas e apresenta um estudo comparativo entre os
+paradigmas, considerando modelo de comunicacao (push x pull),
+tamanho de payload e uso de recursos do servidor.
+
+
+2. INTRODUCAO
+--------------------------------------------------------------
+
+APIs sao o principal mecanismo pelo qual sistemas trocam dados
+entre si, e a escolha do paradigma de comunicacao afeta
+diretamente caracteristicas como latencia, uso de banda e
+complexidade do cliente. Dados de monitoramento - como uso de CPU,
+RAM e disco - sao um bom caso de uso para comparar paradigmas
+diferentes, pois exigem tanto atualizacao continua (para
+acompanhar o estado atual da maquina) quanto consultas pontuais
+sobre o que ja foi coletado (para analises como media ou pico de
+uso em um intervalo).
+
+O objetivo deste trabalho e implementar, para esse mesmo dominio
+de dados, uma API de cada uma das duas categorias exigidas: uma de
+transmissao (WebSocket) e uma de consulta (GraphQL); e, a partir
+dessa implementacao concreta, comparar na pratica os dois
+paradigmas.
+
+O restante do relatorio esta organizado da seguinte forma: a
+secao 3 justifica a escolha dos paradigmas; a secao 4 descreve a
+arquitetura da aplicacao; as secoes 5 e 6 documentam,
+respectivamente, a API WebSocket e a API GraphQL desenvolvidas; a
+secao 7 apresenta o estudo comparativo entre as duas; e a secao 8
+traz as consideracoes finais.
+
+
+3. PARADIGMAS DE API ESCOLHIDOS
+--------------------------------------------------------------
+
+A dupla escolheu:
+
+  - GraphQL (lista de paradigmas de consulta), para consultas
+    diversificadas sobre o historico de metricas coletadas.
+
+  - WebSocket (lista de paradigmas de transmissao), para envio
+    de dados em tempo real ao cliente conectado.
+
+Essa combinacao foi escolhida porque as duas necessidades do
+sistema - acompanhar o estado atual da maquina e consultar o
+historico recente - mapeiam diretamente para as forcas de cada
+paradigma: push continuo para o primeiro caso, consulta sob
+demanda e flexivel para o segundo (ver comparacao detalhada na
+secao 7).
+
+
+4. ARQUITETURA DA APLICACAO
+--------------------------------------------------------------
+
+Visao geral dos componentes:
+
+  [psutil] --(coleta a cada 5s)--> [Servidor FastAPI]
+                                          |
+                     +--------------------+--------------------+
+                     |                                         |
+            grava/le metricas                        broadcast (push)
+                     |                                         |
+                     v                                         v
+          [SQLite: metricas.db]                      [Clientes WebSocket]
+                     ^
+                     |
+            consulta sob demanda (pull)
+                     |
+          [Cliente Web: index.html + script.js]  <--- POST /graphql
+
+Componentes:
+
+  Servidor: FastAPI (Python), exposto em http://127.0.0.1:8000
+  Banco de dados: SQLite (arquivo metricas.db), tabela "metricas"
+      (id, horario, cpu, ram, disco)
+  Cliente: pagina web (front/index.html + script.js)
+
+Ciclo de coleta: a cada 5 segundos, o servidor le CPU/RAM/disco
+(biblioteca psutil), grava uma linha no banco e envia a leitura
+para todos os clientes WebSocket conectados nesse mesmo ciclo (ver
+secao 5). Registros com mais de 5 minutos sao descartados do banco
+automaticamente a cada nova insercao.
+
+Justificativa da janela de retencao de 5 minutos:
+  - O sistema foi pensado como um monitoramento "ao vivo" do
+    computador (dashboard em tempo real), e nao como um repositorio
+    de historico de longo prazo; 5 minutos e a mesma ordem de
+    grandeza do intervalo de atualizacao citado como exemplo no
+    proprio enunciado do trabalho ("a cada 5 minutos").
+  - Com coleta a cada 5 segundos, 5 minutos de retencao ja garantem
+    ate ~60 amostras armazenadas, volume suficiente para as
+    consultas GraphQL de media/maximo/minimo mostrarem variacao
+    real e nao apenas 1 ou 2 pontos.
+  - Manter uma janela curta evita que o arquivo metricas.db cresca
+    indefinidamente enquanto o servidor roda (nao ha nenhuma rotina
+    de arquivamento/agregacao de dados antigos neste trabalho), o
+    que mantem o SELECT/DELETE rapidos mesmo apos horas de uso.
+  - Por isso, as consultas GraphQL (media_cpu, media_ram,
+    media_disco, estatisticas_cpu, ver secao 6) devem ser chamadas
+    com "segundos" <= 300 (5 minutos); pedir uma janela maior nao
+    causa erro, mas o calculo so vai considerar os dados que ainda
+    nao foram descartados.
+
+No cliente, a pagina:
+  - abre uma conexao WebSocket e atualiza CPU/RAM/disco na tela
+    em tempo real, a cada nova mensagem recebida (secao 5);
+  - possui botoes que disparam consultas GraphQL sob demanda,
+    com a janela de tempo escolhida (secao 6).
+
+Figura 1 - Tela do cliente (dashboard) logo apos conectar via
+WebSocket, mostrando CPU/RAM/Disco atualizados e status "WebSocket
+conectado":
+  [ver prints/tela-cliente-dashboard.png]
+
+Figura 2 - Tela do cliente apos clicar no botao "Estatisticas da
+CPU", mostrando o resultado de uma consulta GraphQL
+(estatisticasCpu) exibido na area "Resultado":
+  [ver prints/tela-cliente-consulta-graphql.png]
+
+Figura 3 - Terminal do servidor (uvicorn) durante a sessao que
+gerou as Figuras 1 e 2: inicializacao, requisicoes HTTP da pagina
+e dos arquivos estaticos, aceite da conexao WebSocket
+("WebSocket /ws" [accepted] / "connection open") e a requisicao
+POST /graphql referente ao clique no botao:
+  [ver prints/tela-servidor-terminal.png]
+
+
+5. DOCUMENTACAO DA API WEBSOCKET
+--------------------------------------------------------------
+
+Endpoint: ws://127.0.0.1:8000/ws  (wss:// se o site for https)
+
+Fluxo:
+  1. O cliente abre a conexao (handshake HTTP -> WebSocket).
+  2. O servidor aceita e guarda a conexao em uma lista de clientes
+     ativos (back/websocket.py).
+  3. A cada 5 segundos, o servidor calcula uma nova metrica e
+     envia (broadcast) o mesmo JSON para todos os clientes
+     conectados, sem que o cliente precise pedir nada.
+  4. Se o envio falhar (cliente desconectado), a conexao e
+     removida da lista de clientes ativos.
+
+Formato da mensagem enviada pelo servidor (JSON):
+{
+  "horario": "2026-09-14 10:15:30",
+  "cpu": 32.5,
+  "ram": 61.2,
+  "disco": 45.1
+}
+
+Caracteristicas:
+  - Comunicacao bidirecional e persistente (uma unica conexao TCP
+    fica aberta durante toda a sessao).
+  - Push do servidor para o cliente, sem necessidade de novas
+    requisicoes HTTP a cada atualizacao.
+  - O payload enviado e sempre fixo (cpu, ram, disco, horario),
+    independente do que o cliente realmente precisa exibir.
+
+
+6. DOCUMENTACAO DA API GRAPHQL
+--------------------------------------------------------------
+
+Endpoint: POST /graphql  (Content-Type: application/json)
+
+Schema (Query):
+
+  metricas: [Metrica]
+      Retorna todo o historico armazenado (ate 5 min, ver secao 4),
+      do mais recente para o mais antigo.
+      Metrica { id, horario, cpu, ram, disco }
+
+  mediaCpu(segundos: Int!): Float
+      Media de uso de CPU nos ultimos N segundos.
+
+  mediaRam(segundos: Int!): Float
+      Media de uso de RAM nos ultimos N segundos.
+
+  mediaDisco(segundos: Int!): Float
+      Media de uso de disco nos ultimos N segundos.
+
+  estatisticasCpu(segundos: Int!): EstatisticasCpu
+      Estatisticas de CPU nos ultimos N segundos em uma unica
+      consulta.
+      EstatisticasCpu { media, maximo, minimo, amostras }
+
+Exemplo de requisicao (media de CPU nos ultimos 5 minutos, o
+maximo permitido pela janela de retencao do banco):
+
+  query {
+    mediaCpu(segundos: 300)
+  }
+
+Exemplo de resposta:
+
+  { "data": { "mediaCpu": 27.84 } }
+
+Exemplo de requisicao mais complexa (estatisticas em um so campo):
+
+  query {
+    estatisticasCpu(segundos: 60) {
+      media
+      maximo
+      minimo
+      amostras
+    }
+  }
+
+Caracteristicas:
+  - Consulta sob demanda (pull): o cliente pede exatamente quando
+    quer o dado, com os parametros que quiser (janela de tempo).
+  - O cliente escolhe exatamente quais campos quer de volta (ex.:
+    so "media", sem "maximo"/"minimo"/"amostras"), evitando
+    payload desnecessario.
+  - Permite combinar/mudar consultas sem alterar o backend (basta
+    pedir outros campos do mesmo tipo).
+
+
+7. ESTUDO COMPARATIVO: GRAPHQL x WEBSOCKET
+--------------------------------------------------------------
+
+7.1 Comparacao conceitual
+
+  Aspecto                  | GraphQL              | WebSocket
+  --------------------------------------------------------------
+  Modelo                   | Pull (cliente pede)  | Push (servidor envia)
+  Uso ideal                | Consultas historicas,| Dados em tempo real,
+                            | agregadas, sob demanda| streaming continuo
+  Payload                  | So os campos pedidos  | Objeto fixo, sempre
+                            | (evita over-fetching) | o mesmo formato
+  Conexao                  | 1 requisicao HTTP por | 1 conexao persistente
+                            | consulta              | para toda a sessao
+  Overhead por atualizacao | Alto (handshake HTTP  | Baixo (so o frame
+                            | a cada chamada)       | com os dados)
+
+7.2 Comparacao pratica (uso de CPU/RAM do processo do servidor,
+    tamanho medio de payload e latencia) em dois computadores
+    diferentes
+
+  [PENDENTE - preencher apos executar os testes descritos abaixo
+   nos dois notebooks da dupla]
+
+  Metrica                          | Notebook 1 | Notebook 2
+                                    | (GraphQL / WebSocket) | (GraphQL / WebSocket)
+  --------------------------------------------------------------
+  CPU media do processo servidor   | [ ] / [ ]  | [ ] / [ ]
+  RAM media do processo servidor   | [ ] / [ ]  | [ ] / [ ]
+  Tamanho medio do payload (bytes) | [ ] / [ ]  | [ ] / [ ]
+  Latencia media (ms)              | [ ] / [ ]  | [ ] / [ ]
+  Especificacao do notebook        | [CPU/RAM]  | [CPU/RAM]
+
+  Como coletar esses numeros (Windows/PowerShell):
+
+  a) CPU/RAM do processo do servidor (rodar em outro terminal,
+     enquanto o "uvicorn" esta ativo):
+       Get-Process python | Select-Object Id, CPU, WS
+
+     (WS = Working Set, memoria em bytes; rode antes/depois de um
+      periodo de uso para ver a variacao)
+
+  b) Tamanho do payload:
+       - Abra o DevTools do navegador (F12) -> aba "Network".
+       - Para o WebSocket: clique na conexao "ws", veja o tamanho
+         de cada frame recebido (coluna "Size"/"Length").
+       - Para o GraphQL: rode uma consulta pelo botao da pagina e
+         veja o tamanho da resposta da requisicao POST /graphql.
+
+  c) Latencia:
+       - WebSocket: tempo entre o envio pelo servidor e o
+         "onmessage" no cliente (pode-se logar timestamps no
+         console do navegador).
+       - GraphQL: aba Network do DevTools mostra o tempo de cada
+         requisicao POST /graphql ("Time"/"Waterfall").
+
+  d) Repita os passos (a)-(c) rodando o mesmo servidor no segundo
+     notebook da dupla, e preencha a coluna "Notebook 2".
+
+7.3 Observacoes esperadas (a confirmar com os dados reais)
+
+  - O WebSocket tende a ter overhead menor por atualizacao, pois
+    reaproveita a mesma conexao e envia um payload pequeno e fixo
+    a cada 5s.
+  - O GraphQL tende a ter mais overhead por chamada (nova conexao
+    HTTP a cada consulta), mas permite pedir exatamente o dado
+    necessario (ex.: so a media, sem o historico inteiro),
+    reduzindo o payload quando a pergunta e especifica.
+  - Diferencas de CPU/RAM entre os dois notebooks devem refletir
+    principalmente a diferenca de hardware entre as maquinas, e
+    nao o paradigma de API em si; por isso a tabela compara os
+    dois paradigmas dentro de cada notebook, alem de comparar
+    entre notebooks.
+
+
+8. CONSIDERACOES FINAIS
+--------------------------------------------------------------
+
+[PENDENTE - escrever apos os testes: qual API se mostrou mais
+adequada para cada tipo de necessidade (tempo real vs consultas
+historicas), dificuldades encontradas na implementacao, etc.]
+
+
+==============================================================
+Codigo-fonte: repositorio do trabalho (pasta back/ e front/)
+Prints referenciados neste relatorio: pasta prints/ na raiz do
+projeto (tela-cliente-dashboard.png, tela-cliente-consulta-
+graphql.png, tela-servidor-terminal.png)
+==============================================================
